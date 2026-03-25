@@ -81,9 +81,8 @@ def run_rl_agent(data: dict, model, vec_norm, window_size: int = 64) -> np.ndarr
     env._data = data
     env._n_samples = n
     env._step_idx = window_size
+    env._action_history = np.zeros(n, dtype=np.float64)  # required for closed-loop obs
 
-    obs, _ = env.reset.__wrapped__(env, seed=None) if hasattr(env.reset, "__wrapped__") else (None, None)
-    # Rebuild obs manually from pre-set data
     obs = env._get_obs()
 
     # Wrap in VecNormalize-compatible format using DummyVecEnv
@@ -98,6 +97,8 @@ def run_rl_agent(data: dict, model, vec_norm, window_size: int = 64) -> np.ndarr
         a = float(np.clip(action[0][0], -15.0, 15.0))
         cleaned[t] = data["main"][t] - a
 
+        # Store action so next observation uses the correct residual (closed loop)
+        env._action_history[t] = a
         env._step_idx = t + 1
         if t + 1 < n:
             obs = env._get_obs()

@@ -92,11 +92,11 @@ def main():
         clip_range=0.2,
         ent_coef=1e-3,
         policy_kwargs=dict(net_arch=[256, 256]),
-        tensorboard_log=args.log_dir,
+        tensorboard_log=None,
         verbose=1,
     )
 
-    model.learn(total_timesteps=args.timesteps, progress_bar=True)
+    model.learn(total_timesteps=args.timesteps, progress_bar=False)
 
     # Save model and normalisation statistics together
     model.save(args.save_path)
