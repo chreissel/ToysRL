@@ -15,9 +15,10 @@ Produces
 
 Metrics reported
 ----------------
-  RMS of the output signal in three conditions:
+  RMS of the output signal in four conditions:
     - No subtraction     (raw main channel)
-    - LMS filter         (linear adaptive baseline)
+    - LMS filter         (linear FIR adaptive baseline)
+    - IIR filter         (closed-loop adaptive baseline, mirrors RL observation)
     - RL agent (PPO)     (this work)
     - Oracle             (perfect coupling subtraction, sensor noise only)
 """
@@ -34,7 +35,7 @@ import matplotlib.gridspec as gridspec
 from scipy.signal import welch
 
 from noise_removal import NoiseCancellationEnv, SignalConfig, SignalSimulator
-from baselines import LMSFilter
+from baselines import LMSFilter, IIRFilter
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,20 @@ def rms(x: np.ndarray) -> float:
 
 def run_lms(data: dict, filter_length: int = 64, step_size: float = 5e-4) -> np.ndarray:
     filt = LMSFilter(filter_length=filter_length, step_size=step_size)
+    return filt.run(data["witness"], data["main"])
+
+
+def run_iir(
+    data: dict,
+    feedforward_length: int = 64,
+    feedback_length: int = 64,
+    step_size: float = 5e-4,
+) -> np.ndarray:
+    filt = IIRFilter(
+        feedforward_length=feedforward_length,
+        feedback_length=feedback_length,
+        step_size=step_size,
+    )
     return filt.run(data["witness"], data["main"])
 
 
@@ -97,6 +112,7 @@ def run_rl_agent(data: dict, model, vec_norm, window_size: int = 64) -> np.ndarr
 def plot_overview(
     data: dict,
     lms_clean: np.ndarray,
+    iir_clean: np.ndarray,
     rl_clean: Optional[np.ndarray],
     save_dir: str,
     fs: float = 128.0,
@@ -127,6 +143,7 @@ def plot_overview(
     ax1 = fig.add_subplot(gs[1, 0])
     ax1.plot(t[mask], data["main"][mask], alpha=0.6, lw=0.8, label="Raw", color="grey")
     ax1.plot(t[mask], lms_clean[mask], alpha=0.8, lw=0.9, label="LMS", color="tab:orange")
+    ax1.plot(t[mask], iir_clean[mask], alpha=0.8, lw=0.9, label="IIR", color="tab:purple")
     if rl_clean is not None:
         ax1.plot(t[mask], rl_clean[mask], alpha=0.9, lw=0.9, label="RL (PPO)", color="tab:blue")
     ax1.plot(t[mask], oracle_clean[mask], "--", lw=0.8, label="Oracle", color="tab:red", alpha=0.7)
@@ -140,8 +157,9 @@ def plot_overview(
     ax2 = fig.add_subplot(gs[1, 1])
     nperseg = 512
     for sig, label, color, lw in [
-        (data["main"], "Raw",    "grey",      1.0),
+        (data["main"], "Raw",    "grey",       1.0),
         (lms_clean,    "LMS",    "tab:orange", 1.2),
+        (iir_clean,    "IIR",    "tab:purple", 1.2),
         (oracle_clean, "Oracle", "tab:red",    1.0),
     ]:
         f_psd, pxx = welch(sig, fs=fs, nperseg=nperseg)
@@ -165,6 +183,7 @@ def plot_overview(
         ])
     ax3.plot(t, rolling_rms(data["main"]), lw=0.8, label="Raw", color="grey", alpha=0.7)
     ax3.plot(t, rolling_rms(lms_clean), lw=0.9, label="LMS", color="tab:orange")
+    ax3.plot(t, rolling_rms(iir_clean), lw=0.9, label="IIR", color="tab:purple")
     if rl_clean is not None:
         ax3.plot(t, rolling_rms(rl_clean), lw=0.9, label="RL (PPO)", color="tab:blue")
     ax3.axhline(rms(oracle_clean), ls="--", color="tab:red", lw=0.9, label="Oracle RMS")
@@ -176,13 +195,13 @@ def plot_overview(
 
     # ---- Summary bar chart ----
     ax4 = fig.add_subplot(gs[2, 1])
-    labels = ["Raw", "LMS", "Oracle"]
-    values = [rms(data["main"]), rms(lms_clean), rms(oracle_clean)]
-    colors = ["grey", "tab:orange", "tab:red"]
+    labels = ["Raw", "LMS", "IIR", "Oracle"]
+    values = [rms(data["main"]), rms(lms_clean), rms(iir_clean), rms(oracle_clean)]
+    colors = ["grey", "tab:orange", "tab:purple", "tab:red"]
     if rl_clean is not None:
-        labels.insert(2, "RL (PPO)")
-        values.insert(2, rms(rl_clean))
-        colors.insert(2, "tab:blue")
+        labels.insert(3, "RL (PPO)")
+        values.insert(3, rms(rl_clean))
+        colors.insert(3, "tab:blue")
     bars = ax4.bar(labels, values, color=colors, alpha=0.8, edgecolor="black", lw=0.7)
     ax4.set_ylabel("RMS amplitude")
     ax4.set_title("Overall RMS comparison")
@@ -198,17 +217,19 @@ def plot_overview(
     plt.close(fig)
 
 
-def print_metrics(data, lms_clean, rl_clean):
+def print_metrics(data, lms_clean, iir_clean, rl_clean):
     oracle_rms = rms(data["sensor_noise"])
     raw_rms    = rms(data["main"])
     lms_rms    = rms(lms_clean)
+    iir_rms    = rms(iir_clean)
 
     print("\n" + "=" * 55)
     print("  Performance summary")
     print("=" * 55)
     print(f"  Oracle (sensor noise floor) : {oracle_rms:.4f}")
     print(f"  Raw main channel            : {raw_rms:.4f}  ({raw_rms/oracle_rms:.1f}× oracle)")
-    print(f"  LMS filter                  : {lms_rms:.4f}  ({lms_rms/oracle_rms:.1f}× oracle)")
+    print(f"  LMS filter (FIR)            : {lms_rms:.4f}  ({lms_rms/oracle_rms:.1f}× oracle)")
+    print(f"  IIR adaptive filter         : {iir_rms:.4f}  ({iir_rms/oracle_rms:.1f}× oracle)")
     if rl_clean is not None:
         rl_rms = rms(rl_clean)
         print(f"  RL agent (PPO)              : {rl_rms:.4f}  ({rl_rms/oracle_rms:.1f}× oracle)")
@@ -246,6 +267,14 @@ def main():
     lms_clean = run_lms(data, filter_length=args.window_size)
     print("LMS filter done.")
 
+    # --- IIR baseline ---
+    iir_clean = run_iir(
+        data,
+        feedforward_length=args.window_size,
+        feedback_length=args.window_size,
+    )
+    print("IIR filter done.")
+
     # --- RL agent ---
     rl_clean = None
     if not args.no_model:
@@ -261,8 +290,8 @@ def main():
             print(f"No model found at {model_zip} — run  python train.py  first.")
             print("Proceeding without RL agent.")
 
-    print_metrics(data, lms_clean, rl_clean)
-    plot_overview(data, lms_clean, rl_clean, save_dir=args.save_dir, fs=cfg.fs)
+    print_metrics(data, lms_clean, iir_clean, rl_clean)
+    plot_overview(data, lms_clean, iir_clean, rl_clean, save_dir=args.save_dir, fs=cfg.fs)
     print("\nDone. Figures saved to", args.save_dir)
 
 
