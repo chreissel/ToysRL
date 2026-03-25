@@ -24,6 +24,7 @@ import argparse
 import os
 
 from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
@@ -144,7 +145,15 @@ def main():
         verbose=1,
     )
 
-    model.learn(total_timesteps=args.timesteps, progress_bar=False)
+    checkpoint_cb = CheckpointCallback(
+        save_freq=max(100_000 // args.n_envs, 1),
+        save_path=os.path.dirname(args.save_path),
+        name_prefix=os.path.basename(args.save_path),
+        save_vecnormalize=True,
+        verbose=1,
+    )
+
+    model.learn(total_timesteps=args.timesteps, callback=checkpoint_cb, progress_bar=False)
 
     # Save model and normalisation statistics together
     model.save(args.save_path)
