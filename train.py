@@ -26,8 +26,8 @@ from noise_removal import NoiseCancellationEnv, SignalConfig
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train PPO noise-cancellation agent")
-    p.add_argument("--timesteps", type=int, default=500_000,
-                   help="Total training timesteps (default: 500 000)")
+    p.add_argument("--timesteps", type=int, default=2_000_000,
+                   help="Total training timesteps (default: 2 000 000)")
     p.add_argument("--n-envs", type=int, default=4,
                    help="Number of parallel training environments (default: 4)")
     p.add_argument("--window-size", type=int, default=64,
@@ -79,18 +79,18 @@ def main():
     )
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    # PPO agent with a small MLP (observations are 128-dim)
+    # PPO agent — tuned for closed-loop noise cancellation
     model = PPO(
         "MlpPolicy",
         vec_env,
-        n_steps=2048,
+        n_steps=4096,            # more samples per rollout → lower gradient variance
         batch_size=256,
         n_epochs=10,
         learning_rate=3e-4,
         gamma=0.99,
         gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=1e-3,
+        clip_range=0.1,          # tighter clipping → stable updates (was causing collapse at 0.2)
+        ent_coef=1e-4,           # less exploration pressure at convergence
         policy_kwargs=dict(net_arch=[256, 256]),
         tensorboard_log=None,
         verbose=1,
