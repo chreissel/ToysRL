@@ -75,21 +75,35 @@ def run_iir(
     return filt.run(data["witness"], data["main"], witness2=w2)
 
 
-def run_rl_agent(data: dict, model, vec_norm, window_size: int = 64) -> np.ndarray:
+def run_rl_agent(
+    data: dict,
+    model,
+    vec_norm,
+    window_size: int = 64,
+    config=None,
+) -> np.ndarray:
     """Roll out the RL agent sample-by-sample on pre-generated data.
 
     Supports both plain PPO (MlpPolicy) and RecurrentPPO (MlpLstmPolicy).
     For recurrent models the LSTM state is carried step-to-step so the agent
     can adapt within the episode, just as it did during training.
+
+    Parameters
+    ----------
+    config : SignalConfig or SeismicConfig used during training.  Must match
+             the config the model was trained with (same multi_source flag so
+             obs_dim matches).  Defaults to SignalConfig() for backward compat.
     """
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
     from noise_removal.environment import NoiseCancellationEnv
 
+    if config is None:
+        config = SignalConfig()
+
     n = len(data["time"])
     cleaned = data["main"].copy()
 
-    cfg = SignalConfig()
-    env = NoiseCancellationEnv(config=cfg, window_size=window_size)
+    env = NoiseCancellationEnv(config=config, window_size=window_size)
 
     # Manually set the episode data so we evaluate on the *same* data as LMS
     env._data = data
@@ -99,7 +113,8 @@ def run_rl_agent(data: dict, model, vec_norm, window_size: int = 64) -> np.ndarr
 
     obs = env._get_obs()
 
-    dummy = DummyVecEnv([lambda: NoiseCancellationEnv(config=cfg, window_size=window_size)])
+    _cfg = config  # capture for lambda closure
+    dummy = DummyVecEnv([lambda: NoiseCancellationEnv(config=_cfg, window_size=window_size)])
     dummy_norm = VecNormalize.load(vec_norm, dummy)
     dummy_norm.training = False
     dummy_norm.norm_reward = False
@@ -259,17 +274,25 @@ def print_metrics(data, lms_clean, iir_clean, rl_clean):
     lms_rms    = rms(lms_clean)
     iir_rms    = rms(iir_clean)
 
-    print("\n" + "=" * 55)
+    print("\n" + "=" * 60)
     print("  Performance summary")
-    print("=" * 55)
-    print(f"  Oracle (sensor noise floor) : {oracle_rms:.4f}")
-    print(f"  Raw main channel            : {raw_rms:.4f}  ({raw_rms/oracle_rms:.1f}× oracle)")
-    print(f"  LMS filter (FIR)            : {lms_rms:.4f}  ({lms_rms/oracle_rms:.1f}× oracle)")
-    print(f"  IIR adaptive filter         : {iir_rms:.4f}  ({iir_rms/oracle_rms:.1f}× oracle)")
+    print("=" * 60)
+    print(f"  Oracle (sensor noise floor)   : {oracle_rms:.4f}")
+    # Show T2L floor if this is the seismic tilt-coupling scenario
+    if "coupling_t2l" in data:
+        t2l_rms    = rms(data["coupling_t2l"])
+        linear_floor = float(np.sqrt(t2l_rms**2 + oracle_rms**2))
+        print(f"  T2L bilinear term             : {t2l_rms:.4f}")
+        print(f"  Linear filter floor           : {linear_floor:.4f}"
+              f"  ({linear_floor/oracle_rms:.1f}× oracle)  ← NLMS cannot beat this")
+    print(f"  Raw main channel              : {raw_rms:.4f}  ({raw_rms/oracle_rms:.1f}× oracle)")
+    print(f"  NLMS filter                   : {lms_rms:.4f}  ({lms_rms/oracle_rms:.1f}× oracle)")
+    print(f"  IIR adaptive filter           : {iir_rms:.4f}  ({iir_rms/oracle_rms:.1f}× oracle)")
     if rl_clean is not None:
         rl_rms = rms(rl_clean)
-        print(f"  RL agent (PPO)              : {rl_rms:.4f}  ({rl_rms/oracle_rms:.1f}× oracle)")
-    print("=" * 55)
+        beats = " *** BEATS LINEAR FLOOR ***" if "coupling_t2l" in data and rl_rms < float(np.sqrt(rms(data["coupling_t2l"])**2 + oracle_rms**2)) else ""
+        print(f"  RL agent (RecurrentPPO)       : {rl_rms:.4f}  ({rl_rms/oracle_rms:.1f}× oracle){beats}")
+    print("=" * 60)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +372,7 @@ def main():
             from sb3_contrib import RecurrentPPO
             model = RecurrentPPO.load(model_zip)
             print(f"Loaded model from {model_zip}")
-            rl_clean = run_rl_agent(data, model, vecnorm, window_size=args.window_size)
+            rl_clean = run_rl_agent(data, model, vecnorm, window_size=args.window_size, config=cfg)
             print("RL rollout done.")
         else:
             print(f"No model found at {model_zip} — run  python train.py  first.")

@@ -90,12 +90,13 @@ def main():
     print("  RL Noise Cancellation — RecurrentPPO Training")
     print("=" * 60)
     print(f"  Sampling rate  : {config.fs} Hz")
-    print(f"  Witness freq   : {config.witness_freq} Hz")
+    if hasattr(config, "witness_freq"):
+        print(f"  Witness freq   : {config.witness_freq} Hz")
     print(f"  Sensor noise σ : {config.sensor_noise_sigma}")
     if args.seismic:
-        if config.multi_source:
-            print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2  (seismic multi-source FIR)")
-        elif config.regime_changes:
+        if config.multi_source and getattr(config, "tilt_coupling", False):
+            print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2 + T(t)·θ(t)·w1  (seismic + T2L)")
+        elif config.multi_source:
             print(f"  Coupling model : h_k⊛w  ({config.n_regimes} FIR regimes, "
                   f"mean hold {config.mean_hold_time:.0f} s)  (seismic)")
         else:
