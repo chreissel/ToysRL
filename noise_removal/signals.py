@@ -80,7 +80,10 @@ class SignalConfig:
     multi_source: bool = False      # enable second witness + cross-term coupling
     regime_changes: bool = False    # piecewise-constant coupling with sudden jumps
     n_regimes: int = 4              # number of discrete coupling modes
-    mean_hold_time: float = 8.0     # average seconds between regime switches (Poisson)
+    mean_hold_time: float = 3.0     # average seconds per regime (Poisson).
+                                    # Filter convergence time ≈ 1/(2μ·power) ≈ 8 s,
+                                    # so hold << 8 s keeps the filter always mid-
+                                    # convergence, exposing the switch-recovery gap.
 
 
 # ---------------------------------------------------------------------------
