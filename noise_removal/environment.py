@@ -28,6 +28,7 @@ from typing import Optional
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from scipy.signal import butter, sosfilt_zi, sosfilt
 
 from .signals import SignalConfig, SignalSimulator, SeismicConfig, SeismicSignalSimulator
 
@@ -41,7 +42,10 @@ class NoiseCancellationEnv(gym.Env):
 
     Action space : Box(1,)  in  [-action_clip, +action_clip]
 
-    Reward : y_t² − (y_t − a_t)²  (squared-error improvement)
+    Reward : y_t² − (y_t − a_t)²  (squared-error improvement, broadband)
+           or, with freq_reward=True:
+             y_bp_t² − e_bp_t²  (improvement in band-limited power only,
+             where bp = bandpass-filtered to [freq_band_low, freq_band_high] Hz)
 
     Parameters
     ----------
@@ -49,6 +53,9 @@ class NoiseCancellationEnv(gym.Env):
     window_size      : W — observation window length in samples
     episode_duration : episode length in seconds
     action_clip      : symmetric bound on the action space
+    freq_reward      : if True, compute reward on band-limited residual only
+    freq_band_low    : lower edge of reward band in Hz (default 0.1 Hz)
+    freq_band_high   : upper edge of reward band in Hz (default 15.0 Hz)
     """
 
     metadata = {"render_modes": []}
@@ -59,12 +66,16 @@ class NoiseCancellationEnv(gym.Env):
         window_size: int = 64,
         episode_duration: float = 30.0,
         action_clip: float = 15.0,
+        freq_reward: bool = False,
+        freq_band_low: float = 0.1,
+        freq_band_high: float = 15.0,
     ):
         super().__init__()
         self.config = config if config is not None else SignalConfig()
         self.window_size = window_size
         self.episode_duration = episode_duration
         self.action_clip = action_clip
+        self.freq_reward = freq_reward
 
         # obs = [w1_win, (w2_win,) residual_win]
         n_witness_channels = 2 if self.config.multi_source else 1
@@ -76,11 +87,23 @@ class NoiseCancellationEnv(gym.Env):
             low=-action_clip, high=action_clip, shape=(1,), dtype=np.float32
         )
 
+        # Design bandpass filter for frequency-domain reward (DLS-style)
+        if freq_reward:
+            fs = self.config.fs
+            nyq = fs / 2.0
+            low = max(freq_band_low, 0.01)
+            high = min(freq_band_high, nyq * 0.99)
+            self._bp_sos = butter(4, [low, high], btype="bandpass", fs=fs, output="sos")
+        else:
+            self._bp_sos = None
+
         # Episode state (populated in reset)
         self._data: Optional[dict] = None
         self._step_idx: int = 0
         self._n_samples: int = 0
         self._action_history: Optional[np.ndarray] = None
+        self._bp_zi_y: Optional[np.ndarray] = None  # bandpass state for y_t
+        self._bp_zi_e: Optional[np.ndarray] = None  # bandpass state for e_t
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -101,6 +124,12 @@ class NoiseCancellationEnv(gym.Env):
         self._step_idx = self.window_size
         self._action_history = np.zeros(self._n_samples, dtype=np.float64)
 
+        # Reset causal bandpass filter states
+        if self._bp_sos is not None:
+            zi_template = sosfilt_zi(self._bp_sos)  # shape (n_sections, 2)
+            self._bp_zi_y = zi_template * 0.0
+            self._bp_zi_e = zi_template * 0.0
+
         return self._get_obs(), {}
 
     def step(self, action: np.ndarray):
@@ -112,7 +141,15 @@ class NoiseCancellationEnv(gym.Env):
 
         self._action_history[t] = a
 
-        reward = float(y_t**2 - y_clean**2)
+        if self._bp_sos is not None:
+            # Frequency-domain reward: improve band-limited power (DLS-style)
+            y_arr = np.array([y_t])
+            e_arr = np.array([y_clean])
+            y_bp_arr, self._bp_zi_y = sosfilt(self._bp_sos, y_arr, zi=self._bp_zi_y)
+            e_bp_arr, self._bp_zi_e = sosfilt(self._bp_sos, e_arr, zi=self._bp_zi_e)
+            reward = float(y_bp_arr[0] ** 2 - e_bp_arr[0] ** 2)
+        else:
+            reward = float(y_t**2 - y_clean**2)
 
         self._step_idx += 1
         terminated = self._step_idx >= self._n_samples
