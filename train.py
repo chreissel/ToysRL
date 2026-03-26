@@ -72,7 +72,7 @@ def make_env(config, window_size, episode_duration):
 
 def main():
     args = parse_args()
-    os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
+    os.makedirs(os.path.dirname(args.save_path) or ".", exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
     if args.seismic:
@@ -98,8 +98,7 @@ def main():
         if config.multi_source and getattr(config, "tilt_coupling", False):
             print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2 + T(t)·θ(t)·w1  (seismic + T2L)")
         elif config.multi_source:
-            print(f"  Coupling model : h_k⊛w  ({config.n_regimes} FIR regimes, "
-                  f"mean hold {config.mean_hold_time:.0f} s)  (seismic)")
+            print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2  (seismic multi-source)")
         else:
             print(f"  Coupling model : h(t)⊛w  (seismic: OU-drifting resonant FIR)")
     elif config.multi_source:
