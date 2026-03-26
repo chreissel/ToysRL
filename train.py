@@ -24,11 +24,13 @@ import argparse
 import os
 
 from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
 from noise_removal import NoiseCancellationEnv, SignalConfig, SeismicConfig
+from noise_removal.policy import DilatedCausalConvExtractor
 
 
 def parse_args():
@@ -57,22 +59,40 @@ def parse_args():
     p.add_argument("--tilt-coupling", action="store_true",
                    help="Add bilinear tilt-to-length cross-coupling "
                         "(seismic + multi-source only): C_T2L = T(t)·θ(t)·w1(t)")
+    p.add_argument("--freq-reward", action="store_true",
+                   help="Use frequency-domain reward (DLS-style): reward improvement "
+                        "in band-limited power [freq-low, freq-high] Hz only")
+    p.add_argument("--freq-low", type=float, default=0.1,
+                   help="Lower edge of reward band in Hz (default: 0.1)")
+    p.add_argument("--freq-high", type=float, default=15.0,
+                   help="Upper edge of reward band in Hz (default: 15.0)")
+    p.add_argument("--dilated-conv", action="store_true",
+                   help="Use dilated causal convolution policy (PPO) instead of "
+                        "LSTM policy (RecurrentPPO). Inspired by DeepMind DLS.")
+    p.add_argument("--conv-channels", type=int, default=64,
+                   help="Number of channels in dilated conv extractor (default: 64)")
+    p.add_argument("--conv-layers", type=int, default=6,
+                   help="Number of dilated conv layers (default: 6, RF=127 samples)")
     return p.parse_args()
 
 
-def make_env(config, window_size, episode_duration):
+def make_env(config, window_size, episode_duration,
+             freq_reward=False, freq_low=0.1, freq_high=15.0):
     def _init():
         return NoiseCancellationEnv(
             config=config,
             window_size=window_size,
             episode_duration=episode_duration,
+            freq_reward=freq_reward,
+            freq_band_low=freq_low,
+            freq_band_high=freq_high,
         )
     return _init
 
 
 def main():
     args = parse_args()
-    os.makedirs(os.path.dirname(args.save_path) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
     if args.seismic:
@@ -87,8 +107,9 @@ def main():
             regime_changes=args.regime_changes,
         )
 
+    algo_name = "PPO + DilatedCausalConv" if args.dilated_conv else "RecurrentPPO (LSTM)"
     print("=" * 60)
-    print("  RL Noise Cancellation — RecurrentPPO Training")
+    print(f"  RL Noise Cancellation — {algo_name}")
     print("=" * 60)
     print(f"  Sampling rate  : {config.fs} Hz")
     if hasattr(config, "witness_freq"):
@@ -98,7 +119,8 @@ def main():
         if config.multi_source and getattr(config, "tilt_coupling", False):
             print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2 + T(t)·θ(t)·w1  (seismic + T2L)")
         elif config.multi_source:
-            print(f"  Coupling model : h1(t)⊛w1 + h2(t)⊛w2  (seismic multi-source)")
+            print(f"  Coupling model : h_k⊛w  ({config.n_regimes} FIR regimes, "
+                  f"mean hold {config.mean_hold_time:.0f} s)  (seismic)")
         else:
             print(f"  Coupling model : h(t)⊛w  (seismic: OU-drifting resonant FIR)")
     elif config.multi_source:
@@ -113,36 +135,78 @@ def main():
     print(f"  Episode length : {args.episode_duration} s")
     print(f"  Total steps    : {args.timesteps:,}")
     print(f"  Parallel envs  : {args.n_envs}")
+    if args.freq_reward:
+        print(f"  Reward         : band-limited [{args.freq_low}, {args.freq_high}] Hz (DLS-style)")
+    else:
+        print(f"  Reward         : broadband squared-error improvement")
+    if args.dilated_conv:
+        print(f"  Policy         : dilated causal conv ({args.conv_layers} layers, "
+              f"{args.conv_channels} channels)")
+    else:
+        print(f"  Policy         : LSTM (RecurrentPPO, hidden=256)")
     print("=" * 60)
 
     # Vectorised environment with observation normalisation
     vec_env = make_vec_env(
-        make_env(config, args.window_size, args.episode_duration),
+        make_env(config, args.window_size, args.episode_duration,
+                 freq_reward=args.freq_reward,
+                 freq_low=args.freq_low,
+                 freq_high=args.freq_high),
         n_envs=args.n_envs,
     )
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    # RecurrentPPO — LSTM hidden state lets the agent adapt within an episode,
-    # mimicking an online adaptive filter rather than a fixed open-loop mapping.
-    model = RecurrentPPO(
-        "MlpLstmPolicy",
-        vec_env,
-        n_steps=4096,
-        batch_size=256,
-        n_epochs=10,
-        learning_rate=3e-4,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.1,
-        ent_coef=1e-4,
-        policy_kwargs=dict(
+    if args.dilated_conv:
+        # PPO + dilated causal convolution feature extractor (DLS-inspired).
+        # No recurrent state: the dilated conv covers the full observation window
+        # with a receptive field of 127 samples, giving the policy temporal context
+        # without vanishing-gradient issues.
+        policy_kwargs = dict(
+            features_extractor_class=DilatedCausalConvExtractor,
+            features_extractor_kwargs=dict(
+                window_size=args.window_size,
+                conv_channels=args.conv_channels,
+                n_layers=args.conv_layers,
+            ),
             net_arch=[256, 256],
-            lstm_hidden_size=256,
-            n_lstm_layers=1,
-        ),
-        tensorboard_log=None,
-        verbose=1,
-    )
+        )
+        model = PPO(
+            "MlpPolicy",
+            vec_env,
+            n_steps=4096,
+            batch_size=256,
+            n_epochs=10,
+            learning_rate=3e-4,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=1e-3,
+            policy_kwargs=policy_kwargs,
+            tensorboard_log=None,
+            verbose=1,
+        )
+    else:
+        # RecurrentPPO — LSTM hidden state lets the agent adapt within an episode,
+        # mimicking an online adaptive filter rather than a fixed open-loop mapping.
+        model = RecurrentPPO(
+            "MlpLstmPolicy",
+            vec_env,
+            n_steps=4096,
+            batch_size=256,
+            n_epochs=10,
+            learning_rate=3e-4,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.1,
+            ent_coef=1e-4,
+            policy_kwargs=dict(
+                net_arch=[256, 256],
+                lstm_hidden_size=256,
+                n_lstm_layers=1,
+            ),
+            tensorboard_log=None,
+            verbose=1,
+        )
 
     checkpoint_cb = CheckpointCallback(
         save_freq=max(100_000 // args.n_envs, 1),
