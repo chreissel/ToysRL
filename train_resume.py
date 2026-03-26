@@ -102,7 +102,7 @@ def main():
     prefix = base[: base.rindex(f"_{m.group(1)}_steps")] if m else base
 
     checkpoint_cb = CheckpointCallback(
-        save_freq=max(100_000 // args.n_envs, 1),
+        save_freq=max(50_000 // args.n_envs, 1),
         save_path=dirp,
         name_prefix=prefix,
         save_vecnormalize=True,
