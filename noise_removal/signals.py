@@ -123,8 +123,12 @@ class SeismicConfig:
     # and T(t) is an OU-drifting alignment-dependent coupling gain.
     # This is the dominant nonlinearity identified in arXiv:2511.19682.
     tilt_coupling: bool = False
-    t2l_gain: float = 0.8               # nominal T2L coupling gain
-    t2l_gain_drift_sigma: float = 0.2   # OU fluctuation of T2L gain
+    t2l_gain: float = 3.0               # nominal T2L coupling gain.
+                                        # Set so T2L RMS > NLMS linear residual after the
+                                        # clip-fix: T2L ~3.1 RMS vs NLMS-linear ~2.5 RMS,
+                                        # making T2L the dominant residual for linear methods
+                                        # and the primary reason RL can outperform them.
+    t2l_gain_drift_sigma: float = 0.3   # OU fluctuation of T2L gain (scaled with larger mean)
     t2l_thermal_timescale: float = 600.0  # seconds — alignment changes slowly
 
 
@@ -359,7 +363,12 @@ class SeismicSignalSimulator:
         gain_t = _ou_process(n, nom_gain, gain_sigma, cfg.thermal_timescale, cfg.fs, self.rng)
         freq_t = _ou_process(n, nom_freq, freq_sigma, cfg.thermal_timescale, cfg.fs, self.rng)
         gain_t = np.clip(gain_t, 0.3, 5.0)
-        freq_t = np.clip(freq_t, 0.5, cfg.fs / 4.0)
+        # Lower bound: half the nominal frequency (prevents unphysical near-DC resonance).
+        # Upper bound: Nyquist/2 = fs/4.  The previous lower bound of 0.5 was wrong for
+        # the seismic model where nom_freq=0.2 Hz — it clipped every sample to 0.5 Hz,
+        # eliminating all frequency drift and misplacing the resonance outside the
+        # microseismic band.
+        freq_t = np.clip(freq_t, max(0.02, nom_freq * 0.5), cfg.fs / 4.0)
 
         coupling = np.zeros(n)
         for i in range(M, n):
