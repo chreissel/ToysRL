@@ -65,7 +65,7 @@ class NoiseCancellationEnv(gym.Env):
         config: Optional[SeismicConfig] = None,
         window_size: int = 240,
         episode_duration: float = 300.0,
-        action_clip: float = 15.0,
+        action_clip: float = 25.0,   # raised from 15: coupling peaks reach ~25–40 with T2L
         freq_reward: bool = False,
         freq_band_low: float = 0.05,
         freq_band_high: float = 1.5,

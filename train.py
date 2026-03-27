@@ -163,7 +163,7 @@ def main():
             batch_size=256,
             n_epochs=10,
             learning_rate=3e-4,
-            gamma=0.99,
+            gamma=0.999,   # 250 s horizon at 4 Hz; 0.99 (25 s) is too short vs OU timescale 600 s
             gae_lambda=0.95,
             clip_range=0.2,
             ent_coef=1e-3,
@@ -179,7 +179,7 @@ def main():
             batch_size=256,
             n_epochs=10,
             learning_rate=3e-4,
-            gamma=0.99,
+            gamma=0.999,   # 250 s horizon at 4 Hz; 0.99 (25 s) is too short vs OU timescale 600 s
             gae_lambda=0.95,
             clip_range=0.1,
             ent_coef=1e-4,
