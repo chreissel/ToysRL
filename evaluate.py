@@ -155,7 +155,7 @@ def run_rl_agent(
         else:
             action, _ = model.predict(obs_norm, deterministic=True)
 
-        a = float(np.clip(action[0][0], -15.0, 15.0))
+        a = float(np.clip(action[0][0], -env.action_clip, env.action_clip))
         cleaned[t] = data["main"][t] - a
 
         env._action_history[t] = a

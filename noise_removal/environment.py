@@ -49,13 +49,13 @@ class NoiseCancellationEnv(gym.Env):
 
     Parameters
     ----------
-    config           : SignalConfig (set config.multi_source=True for two channels)
+    config           : SeismicConfig (set config.multi_source=True for two channels)
     window_size      : W — observation window length in samples
     episode_duration : episode length in seconds
-    action_clip      : symmetric bound on the action space
+    action_clip      : symmetric bound on the action space (default 25.0)
     freq_reward      : if True, compute reward on band-limited residual only
-    freq_band_low    : lower edge of reward band in Hz (default 0.1 Hz)
-    freq_band_high   : upper edge of reward band in Hz (default 15.0 Hz)
+    freq_band_low    : lower edge of reward band in Hz (default 0.05 Hz)
+    freq_band_high   : upper edge of reward band in Hz (default 1.5 Hz)
     """
 
     metadata = {"render_modes": []}

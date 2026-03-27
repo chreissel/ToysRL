@@ -236,9 +236,10 @@ Performance measured as RMS of the output signal normalised to the oracle (senso
 | Method | vs Oracle | Notes |
 |--------|-----------|-------|
 | Raw main channel | ~40× | before subtraction |
-| NLMS filter | ~2–4× | linear, stable for coloured noise |
-| IIR adaptive filter | ~2–4× | adds residual feedback |
-| Supervised LSTM (arXiv:2511.19682) | ~1.5–3× | offline-trained |
+| NLMS filter | ~30–60× | linear FIR; T2L and slow 0.2 Hz resonance limit convergence |
+| IIR adaptive filter | ~30–60× | adds residual feedback; same linear floor |
+| Linear filter floor (T2L) | ~3–5× | hard floor from bilinear T2L term; no linear method can beat this |
+| Supervised LSTM (arXiv:2511.19682) | ~3–10× | offline-trained; limited by training episode mismatch |
 | RL — RecurrentPPO (LSTM) | TBD | online adaptive |
 | RL — Deep Loop Shaping (dilated conv) | TBD | online, no recurrent state |
 | **Oracle** | **1×** | sensor noise floor only |
